@@ -11,7 +11,7 @@ The solution is comprised of two regions as this a requirement.
 Each region has the following entities running:
 
 1. ALB to handle incoming requests, terminate HTTPS, run checks against the application and route requests to the application.
-ALB is cross-region object and spans multiple AZs;
+ALB spans multiple AZs;
 2. Applications that run as ECS tasks in a separate application subnets.
 There is no requirement not to use managed services for application but if it is the application can be placed on EC2/ASG;
 3. Patroni + PostgreSQL cluster comprised of two EC2 nodes running in private database subnets in two regions (can be three for higher availability);
@@ -49,30 +49,37 @@ It is not too complex to start but I believe more challenging to manage.
 
 ## Database and schema design
 I will create a database to host the schema:
-> create database hello;
+    > create database hello;
+
 In PostgreSQL all users are able to connect to any database and issue non-privileged statements in public schema
 which was handy in 2000's but currently considered insecure so I am restricting this:
-> revoke connect on database hello from public;
+    > revoke connect on database hello from public;
+
 At this time I will connect to the newly created database and revoke use of public schema for the reason expressed above:
-> revoke usage on schema public from public;
+    > revoke usage on schema public from public;
+
 Then I will create schema role *without* login privilege and it will be solely used to store database objects.
 This is used to separate storage from operations:
-> create role hello;
+    > create role hello;
+
 And the shema to hold database objects:
-> create schema authorization hello;
+    > create schema authorization hello;
+
 Now to the database objects themselves:
->  create table hello.birthdays (username varchar(30), birthday date, constraint pk_birthdays primary key (username) include (birthday));
+    >  create table hello.birthdays (username varchar(30), birthday date, constraint pk_birthdays primary key (username) include (birthday));
+
 Now set ownership to hello role:
-> alter table hello.birthdays owner to hello;
-> alter index hello.pk_birthdays owner to hello;
+    > alter table hello.birthdays owner to hello;
+    > alter index hello.pk_birthdays owner to hello;
+
 Bear in mind that I just created covering index with the include clause to optimize relation access.
 In case all the tuples in the relation are visible PostgreSQL won't need to visit the table and will 'cover' selects solely using index.
 Now create app_user role and grant privileges to it.
 Password is supplied pre-hashed but I am still not showing it.
-> create role app_user encrypted password 'supply_password_here' login;
-> grant select, insert, update on hello.birthdays to app_user;
-> grant connect on database hello to app_user;
-> grant usage on schema hello to app_user;
+    > create role app_user encrypted password 'supply_password_here' login;
+    > grant select, insert, update on hello.birthdays to app_user;
+    > grant connect on database hello to app_user;
+    > grant usage on schema hello to app_user;
 
 ## Application
 Application can be developed around basically any REST framework. I have a bit of experience with Flask and I know it can get the job done.
@@ -85,73 +92,73 @@ Application performs periodic checks towards Patroni API to:
 1. Make sure that the database connection points to the leader and rewrites it accordingly;
 2. Stops processing requests when leader is not available signalling ALB over exposed health endpoint that the application cannot handle incoming connections.
 Upon receiving PUT request the application issues MERGE SQL statement:
-> merge into hello.birthdays trgt using (values (:1, :2)) as src(username, birthday) on trgt.username = src.username
-> when matched then update set birthday = src.birthday
-> when not matched then insert (username, birthday) values (src.username, src.birthday);
+    > merge into hello.birthdays trgt using (values (:1, :2)) as src(username, birthday) on trgt.username = src.username
+    > when matched then update set birthday = src.birthday
+    > when not matched then insert (username, birthday) values (src.username, src.birthday);
 If username is found in the table, birthday will be updated and a new username will be created otherwise.
 For GET a select query will be used.
 I will demonstrate the ability of covering index and the overall flow with the following example
 (sorry this is lengthy but it wasn't intentional and turned out be an exciting experiment that I decided to share):
 
-hello=> merge into hello.birthdays trgt using (values ('a', current_date)) as src(username, birthday) on trgt.username = src.username
-hello-> when matched then update set birthday = src.birthday
-hello-> when not matched then insert (username, birthday) values (src.username, src.birthday);
-MERGE 1
-hello=> select * from hello.birthdays;
- username |  birthday
-----------+------------
- a        | 2025-09-28
-(1 row)
+    hello=> merge into hello.birthdays trgt using (values ('a', current_date)) as src(username, birthday) on trgt.username = src.username
+    hello-> when matched then update set birthday = src.birthday
+    hello-> when not matched then insert (username, birthday) values (src.username, src.birthday);
+    MERGE 1
+    hello=> select * from hello.birthdays;
+    username |  birthday
+    ----------+------------
+    a        | 2025-09-28
+    (1 row)
 
-hello=> explain analyze select birthday from hello.birthdays where username='a';
+    hello=> explain analyze select birthday from hello.birthdays where username='a';
                                                          QUERY PLAN
------------------------------------------------------------------------------------------------------------------------------
- Index Only Scan using pk_birthdays on birthdays  (cost=0.15..8.17 rows=1 width=4) (actual time=0.039..0.040 rows=1 loops=1)
-   Index Cond: (username = 'a'::text)
-   Heap Fetches: 1
- Planning Time: 0.062 ms
- Execution Time: 0.057 ms
-(5 rows)
+    -----------------------------------------------------------------------------------------------------------------------------
+    Index Only Scan using pk_birthdays on birthdays  (cost=0.15..8.17 rows=1 width=4) (actual time=0.039..0.040 rows=1 loops=1)
+       Index Cond: (username = 'a'::text)
+       Heap Fetches: 1
+    Planning Time: 0.062 ms
+    Execution Time: 0.057 ms
+    (5 rows)
 
 As you can see the index is used but I still have heap fetches which is because the visibility map is not updated for this relation.
 Let's switch to the superuser and vacuum it:
-hello=# vacuum hello.birthdays;
+    hello=# vacuum hello.birthdays;
 Vaccum command also updates visibility map. Let's rerun select once again:
-hello=> explain analyze select birthday from hello.birthdays where username='a';
-                                            QUERY PLAN
----------------------------------------------------------------------------------------------------
- Seq Scan on birthdays  (cost=0.00..1.01 rows=1 width=4) (actual time=0.006..0.007 rows=1 loops=1)
-   Filter: ((username)::text = 'a'::text)
- Planning Time: 0.257 ms
- Execution Time: 0.039 ms
-(4 rows)
+    hello=> explain analyze select birthday from hello.birthdays where username='a';
+                                                QUERY PLAN
+    ---------------------------------------------------------------------------------------------------
+    Seq Scan on birthdays  (cost=0.00..1.01 rows=1 width=4) (actual time=0.006..0.007 rows=1 loops=1)
+    Filter: ((username)::text = 'a'::text)
+    Planning Time: 0.257 ms
+    Execution Time: 0.039 ms
+    (4 rows)
 
 Now the index does not work at all.
 The reason is simple -- this is a very tiny table.
 
 Let's create a million of tuples:
-hello=> INSERT INTO hello.birthdays(username, birthday)
-        SELECT substring(md5(random()::text) from 1 for 10) || '_' || gs::text AS username,
-        DATE '1950-01-01' + (random() * (DATE '2010-12-31' - DATE '1950-01-01'))::int AS birthday
-        FROM generate_series(1, 1000000) AS gs;
-INSERT 0 1000000
-hello=> select count(*) from hello.birthdays;
-  count
----------
- 1000003
-(1 row)
+    hello=> INSERT INTO hello.birthdays(username, birthday)
+            SELECT substring(md5(random()::text) from 1 for 10) || '_' || gs::text AS username,
+            DATE '1950-01-01' + (random() * (DATE '2010-12-31' - DATE '1950-01-01'))::int AS birthday
+            FROM generate_series(1, 1000000) AS gs;
+    INSERT 0 1000000
+    hello=> select count(*) from hello.birthdays;
+      count
+    ---------
+    1000003
+    (1 row)
 
 Let's vacuum and analyze once again:
-hello=# vacuum analyze hello.birthdays;
-hello=> explain analyze select birthday from hello.birthdays where username='a';
-                                                         QUERY PLAN
------------------------------------------------------------------------------------------------------------------------------
- Index Only Scan using pk_birthdays on birthdays  (cost=0.42..4.44 rows=1 width=4) (actual time=0.041..0.043 rows=1 loops=1)
-   Index Cond: (username = 'a'::text)
-   Heap Fetches: 0
- Planning Time: 0.784 ms
- Execution Time: 0.073 ms
-(5 rows)
+    hello=# vacuum analyze hello.birthdays;
+    hello=> explain analyze select birthday from hello.birthdays where username='a';
+                                                             QUERY PLAN
+    -----------------------------------------------------------------------------------------------------------------------------
+    Index Only Scan using pk_birthdays on birthdays  (cost=0.42..4.44 rows=1 width=4) (actual time=0.041..0.043 rows=1 loops=1)
+    Index Cond: (username = 'a'::text)
+    Heap Fetches: 0
+    Planning Time: 0.784 ms
+    Execution Time: 0.073 ms
+    (5 rows)
 
 Now we can see at last that covering index works as expected which demonstrates it's power and shows the importance of running vacuum/analyze.
 
