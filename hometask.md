@@ -39,11 +39,10 @@ That way both PostgreSQL+Patroni and ALB will be ready to serve requests from th
 ## Database management
 Database operation is designed around PostgreSQL running in HA cluster with Patroni standby HA cluster running in another region.  
 This solution allows to employ DR solution.  
-Partoni uses Consul as DCS.  
-Consul employs Consensus/Raft protocol to proivide consistency.  
-The number of Consul nodes is chosen as Consul's best practice for optimum number of nodes for quorum and fault tolerance.  
-I am sorry for not covering Patroni and Consul too much.  
-You are aware I have been working with Patroni a lot recently so I am not telling about it much.  
+Patroni uses Consul as DCS.  
+Patroni's standby cluster is configured via bootstrap.dcs.standby_cluster section.  
+Consul employs Consensus/Raft protocol to provide consistency.  
+The number of Consul nodes is chosen accordingly to Consul's best practice for optimum number of nodes for quorum and fault tolerance.  
 I installed Consul to get some understanding of it.  
 It is not too complex to start but I believe more challenging to manage.
 
