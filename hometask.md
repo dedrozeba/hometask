@@ -118,7 +118,7 @@ I will demonstrate the ability of covering index and the overall flow with the f
 (sorry this is lengthy but it wasn't intentional and turned out be an exciting experiment that I decided to share):
 
 ```
-hello=> merge into hello.birthdays trgt using (values ('a', current_date)) as src(username, birthday) on trgt.username = src.username
+hello=> merge into hello.birthdays trgt using (values ('a', current_date-1)) as src(username, birthday) on trgt.username = src.username
 hello-> when matched then update set birthday = src.birthday
 hello-> when not matched then insert (username, birthday) values (src.username, src.birthday);
 MERGE 1
@@ -155,8 +155,10 @@ hello=> explain analyze select birthday from hello.birthdays where username='a';
 ```
 Now the index does not work at all.  
 The reason is simple -- this is a very tiny table.  
-Let's create a million of tuples:
+Let's create a million of tuples.  
+Before this I will disable check constraint on birthday column to make it easier to generate series:
 ```
+hello=# alter table hello.birthdays drop constraint ck_birthdays_birthday;
 hello=> INSERT INTO hello.birthdays(username, birthday)
         SELECT substring(md5(random()::text) from 1 for 10) || '_' || gs::text AS username,
         DATE '1950-01-01' + (random() * (DATE '2010-12-31' - DATE '1950-01-01'))::int AS birthday
