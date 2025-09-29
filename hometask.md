@@ -156,7 +156,7 @@ hello=> explain analyze select birthday from hello.birthdays where username='a';
 Now the index does not work at all.  
 The reason is simple -- this is a very tiny table.  
 Let's create a million of tuples.  
-Before this I will disable check constraint on birthday column to make it easier to generate series:
+Before this I will disable check constraint on username column to make it easier to generate series:
 ```
 hello=# alter table hello.birthdays drop constraint ck_birthdays_birthday;
 hello=> INSERT INTO hello.birthdays(username, birthday)
