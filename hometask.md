@@ -49,44 +49,46 @@ It is not too complex to start but I believe more challenging to manage.
 ## Database and schema design
 I will create a database to host the schema:
 ```
-> create database hello;
+create database hello;
 ```
 In PostgreSQL all users are able to connect to any database and issue non-privileged statements in public schema  
 which was handy in 2000's but currently considered insecure so I am restricting this:
 ```
-> revoke connect on database hello from public;
+revoke connect on database hello from public;
 ```
 At this time I will connect to the newly created database and revoke public schema usage for the reason expressed above:
 ```
-> revoke usage on schema public from public;
+revoke usage on schema public from public;
 ```
 Then I will create schema role *without* login privilege and it will be solely used to store database objects.  
 This is used to separate storage from operations:
 ```
-> create role hello;
+create role hello;
 ```
 And the shema to hold database objects:
 ```
-> create schema authorization hello;
+create schema authorization hello;
 ```
 Now to the database objects themselves:
 ```
-> create table hello.birthdays (username varchar(30), birthday date, constraint pk_birthdays primary key (username) include (birthday));
+create table hello.birthdays (username varchar(30), birthday date, constraint pk_birthdays primary key (username) include (birthday),
+constraint ck_birthdays_birthday check (birthday < current_date), constraint ck_birthdays_username check (username ~ '^[A-Za-z]+$'));
 ```
-And set the ownership of database objects to hello role:
+It might make sense to create birthday as domain.
+Now set the ownership of database objects to hello role:
 ```
-> alter table hello.birthdays owner to hello;
-> alter index hello.pk_birthdays owner to hello;
+alter table hello.birthdays owner to hello;
+alter index hello.pk_birthdays owner to hello;
 ```
 Bear in mind that I just created covering index with the include clause to optimize relation access.  
 In case all the tuples in the relation are visible PostgreSQL won't need to visit the table and will 'cover' selects solely using index.  
 Now create app_user role and grant privileges to it.  
 Password is supplied pre-hashed but I am still not showing it.
 ```
-> create role app_user encrypted password 'supply_password_here' login;
-> grant select, insert, update on hello.birthdays to app_user;
-> grant connect on database hello to app_user;
-> grant usage on schema hello to app_user;
+create role app_user encrypted password 'supply_password_here' login;
+grant select, insert, update on hello.birthdays to app_user;
+grant connect on database hello to app_user;
+grant usage on schema hello to app_user;
 ```
 
 ## Application
@@ -103,9 +105,9 @@ Application performs periodic checks towards Patroni API to:
 Upon receiving PUT request the application issues MERGE SQL statement:
 
 ```
-> merge into hello.birthdays trgt using (values (:1, :2)) as src(username, birthday) on trgt.username = src.username
-> when matched then update set birthday = src.birthday
-> when not matched then insert (username, birthday) values (src.username, src.birthday);
+merge into hello.birthdays trgt using (values (:1, :2)) as src(username, birthday) on trgt.username = src.username
+when matched then update set birthday = src.birthday
+when not matched then insert (username, birthday) values (src.username, src.birthday);
 ```
 
 If username is found in the table, birthday will be updated and a new username will be created otherwise.  
