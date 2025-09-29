@@ -71,8 +71,10 @@ create schema authorization hello;
 ```
 Now to the database objects themselves:
 ```
-create table hello.birthdays (username varchar(30), birthday date, constraint pk_birthdays primary key (username) include (birthday),
-constraint ck_birthdays_birthday check (birthday < current_date), constraint ck_birthdays_username check (username ~ '^[A-Za-z]+$'));
+create table hello.birthdays (username varchar(30), birthday date,
+constraint pk_birthdays primary key (username) include (birthday),
+constraint ck_birthdays_birthday check (birthday < current_date),
+constraint ck_birthdays_username check (username ~ '^[A-Za-z]+$'));
 ```
 It might make sense to create birthday as domain.
 Now set the ownership of database objects to hello role:
